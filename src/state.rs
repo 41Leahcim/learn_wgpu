@@ -277,12 +277,16 @@ impl State {
 
     pub fn input(&mut self, event: &WindowEvent) -> bool {
         match event {
+            // Keyboard input received
             WindowEvent::KeyboardInput { input, .. } => {
+                // If the user pressed a key
                 if let Some(key) = input
                     .virtual_keycode
                     .filter(|_| input.state == ElementState::Pressed)
                 {
+                    // Check what key the user pressed
                     match key {
+                        // If it is B, make the background blue
                         winit::event::VirtualKeyCode::B => {
                             self.background_color = Color {
                                 r: 0.0,
@@ -291,6 +295,8 @@ impl State {
                                 a: 1.0,
                             }
                         }
+
+                        // If it is G, make the background green
                         winit::event::VirtualKeyCode::G => {
                             self.background_color = Color {
                                 r: 0.0,
@@ -299,6 +305,8 @@ impl State {
                                 a: 1.0,
                             }
                         }
+
+                        // If it is R, make the background red
                         winit::event::VirtualKeyCode::R => {
                             self.background_color = Color {
                                 r: 1.0,
@@ -307,16 +315,23 @@ impl State {
                                 a: 1.0,
                             }
                         }
+
+                        // If it is space, switch the render pipelines
                         winit::event::VirtualKeyCode::Space => {
                             core::mem::swap(&mut self.render_pipeline, &mut self.second_pipeline);
                         }
-                        _ => {}
+                        _ => return false,
                     }
                 }
             }
+
+            // If the cursor moved
             WindowEvent::CursorMoved { position, .. } => {
+                // Calculate the normalized x and y positions
                 let x = position.x / f64::from(self.size.width);
                 let y = position.y / f64::from(self.size.height);
+
+                // If they are between 0 and 1, calculate and set the new background colors
                 if (0.0..1.0).contains(&x) && (0.0..1.0).contains(&y) {
                     self.background_color = Color {
                         r: x,
@@ -326,6 +341,8 @@ impl State {
                     };
                 }
             }
+
+            // If the cursor left the screen, make the background black
             WindowEvent::CursorLeft { .. } => {
                 self.background_color = Color {
                     r: 0.0,
@@ -334,9 +351,9 @@ impl State {
                     a: 1.0,
                 }
             }
-            _ => {}
+            _ => return false,
         }
-        false
+        true
     }
 
     pub fn update(&mut self) {}

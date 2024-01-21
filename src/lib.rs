@@ -70,14 +70,22 @@ pub async fn run() {
         // RedrawRequested will onluy trigger once unless we manually request it.
         Event::MainEventsCleared => state.window().request_redraw(),
 
+        // If the window changed
         Event::WindowEvent { window_id, event } if window_id == state.window().id() => {
+            // And none of the applications inputs were used
             if !state.input(&event) {
                 {
+                    // Check what event happened
                     match event {
+                        // If the window resized, update the states size
                         WindowEvent::Resized(physical_size) => state.resize(physical_size),
+
+                        // If the scale factor changed, update the states size
                         WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                             state.resize(*new_inner_size);
                         }
+
+                        // If close was requested or escape was pressed, close the application
                         winit::event::WindowEvent::CloseRequested
                         | winit::event::WindowEvent::KeyboardInput {
                             input:
