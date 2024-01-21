@@ -1,8 +1,12 @@
 use wgpu::{
-    Backends, Color, CommandEncoderDescriptor, Device, DeviceDescriptor, Features, Instance,
-    InstanceDescriptor, Limits, LoadOp, Operations, Queue, RenderPassColorAttachment,
-    RenderPassDescriptor, RequestAdapterOptions, StoreOp, Surface, SurfaceConfiguration,
-    SurfaceError, TextureFormat, TextureUsages, TextureViewDescriptor,
+    Adapter, Backends, BlendState, Color, ColorTargetState, ColorWrites, CommandEncoder,
+    CommandEncoderDescriptor, Device, DeviceDescriptor, Face, Features, FragmentState, FrontFace,
+    Instance, InstanceDescriptor, Limits, LoadOp, MultisampleState, Operations,
+    PipelineLayoutDescriptor, PolygonMode, PrimitiveState, PrimitiveTopology, Queue,
+    RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
+    RequestAdapterOptions, ShaderModuleDescriptor, ShaderSource, StoreOp, Surface,
+    SurfaceConfiguration, SurfaceError, TextureFormat, TextureUsages, TextureView,
+    TextureViewDescriptor, VertexState,
 };
 use winit::{dpi::PhysicalSize, event::WindowEvent, window::Window};
 
@@ -12,14 +16,149 @@ pub struct State {
     queue: Queue,
     config: SurfaceConfiguration,
     size: PhysicalSize<u32>,
+
     /// The window must be declared after the surface so
     /// it gets dropped after after it as the surface contains
     /// unsafe references to the window's resources.
     window: Window,
+
     background_color: Color,
+    render_pipeline: RenderPipeline,
 }
 
 impl State {
+    async fn create_adapter(instance: &Instance, surface: &Surface) -> Adapter {
+        // Create an adapter to interact directly with the GPU
+        // You can also use enumerate_adapters to iterate through possible adapters
+        instance
+            .request_adapter(&RequestAdapterOptions {
+                // LowPower is favored when there is no HighPerformance option
+                power_preference: wgpu::PowerPreference::default(),
+
+                // The adapter should be compatible with the selected surface
+                compatible_surface: Some(surface),
+
+                // Don't force an adapter, the application won't run without compatible hardware
+                force_fallback_adapter: false,
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn request_device(adapter: &Adapter) -> (Device, Queue) {
+        adapter
+            .request_device(
+                &DeviceDescriptor {
+                    label: None,
+
+                    // Extra features
+                    features: Features::empty(),
+
+                    // WebGL doesn't support all of wgpu's features, so if
+                    // we're building for the web, we'll have to disable some.
+                    limits: if cfg!(target_arch = "wasm32") {
+                        Limits::downlevel_webgl2_defaults()
+                    } else {
+                        Limits::default()
+                    },
+                },
+                None,
+            )
+            .await
+            .unwrap()
+    }
+
+    fn create_pipeline(device: &Device, config: &SurfaceConfiguration) -> RenderPipeline {
+        // Read the shader.
+        // Can also be done with:
+        //let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+        let shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Shader"),
+            source: ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
+
+        // Create a layout for the pipeline
+        let render_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
+
+        device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: VertexState {
+                module: &shader,
+                // The function in the shader that should be the entry point.
+                // In this case for the vertex shader.
+                entry_point: "vs_main",
+
+                // The types of vertices to pass to the vertex shader
+                buffers: &[],
+            },
+
+            // The fragment state is optional, but here it's needed to store color data
+            // to the surface
+            fragment: Some(FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+
+                // The color outputs to set up
+                targets: &[Some(ColorTargetState {
+                    // Using the surface's format makes copying to it easy
+                    format: config.format,
+
+                    // Blending should replace the old data with the new data
+                    blend: Some(BlendState::REPLACE),
+
+                    // Write to all colors
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+
+            // How to interpret vertices when converting them into triangles
+            primitive: PrimitiveState {
+                // `PrimitiveTopology::TriangleList` means that every 3 vertices will correspond
+                // to 1 triangle.
+                topology: PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+
+                // Determine whether a triangle is facing forward.
+                // With `FrontFace::Ccw`, a triangle is facing forward if the vertices are in
+                // counter-clockwise direction.
+                // Other triangles are culled as specified by `Face::Back`.
+                front_face: FrontFace::Ccw,
+                cull_mode: Some(Face::Back),
+
+                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                polygon_mode: PolygonMode::Fill,
+
+                // Requires Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+
+                // Requires Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+
+            // The depth.stencil buffer isn't used
+            depth_stencil: None,
+
+            multisample: MultisampleState {
+                // The number of samples the pipeline uses
+                count: 1,
+
+                // Which samples should be active (all of them)
+                mask: !0,
+
+                // No anti aliasing is used
+                alpha_to_coverage_enabled: false,
+            },
+
+            // Number of array layers the render attachments can have
+            multiview: None,
+        })
+    }
+
     /// Creating some of the wgpu types requires async code
     ///
     /// # Panics
@@ -41,42 +180,10 @@ impl State {
         // The surface is the part of the window we draw to.
         let surface = unsafe { instance.create_surface(&window) }.unwrap();
 
-        // Create an adapter to interact directly with the GPU
-        // You can also use enumerate_adapters to iterate through possible adapters
-        let adapter = instance
-            .request_adapter(&RequestAdapterOptions {
-                // LowPower is favored when there is no HighPerformance option
-                power_preference: wgpu::PowerPreference::default(),
+        // Create an adapter
+        let adapter = Self::create_adapter(&instance, &surface).await;
 
-                // The adapter should be compatible with the selected surface
-                compatible_surface: Some(&surface),
-
-                // Don't force an adapter, the application won't run without compatible hardware
-                force_fallback_adapter: false,
-            })
-            .await
-            .unwrap();
-
-        let (device, queue) = adapter
-            .request_device(
-                &DeviceDescriptor {
-                    label: None,
-
-                    // Extra features
-                    features: Features::empty(),
-
-                    // WebGL doesn't support all of wgpu's features, so if
-                    // we're building for the web, we'll have to disable some.
-                    limits: if cfg!(target_arch = "wasm32") {
-                        Limits::downlevel_webgl2_defaults()
-                    } else {
-                        Limits::default()
-                    },
-                },
-                None,
-            )
-            .await
-            .unwrap();
+        let (device, queue) = Self::request_device(&adapter).await;
 
         // Retrieve the capabilities of the surface
         let surface_caps = surface.get_capabilities(&adapter);
@@ -122,6 +229,8 @@ impl State {
         // Apply the configurations
         surface.configure(&device, &config);
 
+        let render_pipeline = Self::create_pipeline(&device, &config);
+
         Self {
             surface,
             device,
@@ -135,6 +244,7 @@ impl State {
                 b: 0.3,
                 a: 1.0,
             },
+            render_pipeline,
         }
     }
 
@@ -214,6 +324,40 @@ impl State {
 
     pub fn update(&mut self) {}
 
+    fn render_with_pipeline(&self, encoder: &mut CommandEncoder, view: &TextureView) {
+        // Clear the screen
+        let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("Render pass"),
+
+            // Where we are going to draw our color
+            color_attachments: &[Some(RenderPassColorAttachment {
+                // The texture to save the colors to
+                view,
+
+                // The texture that will receive the resolved output.
+                // This will be the same as view unless multisampling is enabled.
+                resolve_target: None,
+
+                // What to do with the colors on the screen
+                ops: Operations {
+                    // How to handle colors from the previous frame
+                    load: LoadOp::Clear(self.background_color),
+
+                    // Whether we want to store the renderedd results to the texture
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+        });
+
+        // Add the render pipeline to the render pass
+        render_pass.set_pipeline(&self.render_pipeline);
+
+        render_pass.draw(0..3, 0..1);
+    }
+
     /// # Errors
     /// Returns an error if no render surface could be retrieved
     pub fn render(&mut self) -> Result<(), SurfaceError> {
@@ -233,32 +377,7 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
-        // Clear the screen
-        encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Render pass"),
-
-            // Where we are going to draw our color
-            color_attachments: &[Some(RenderPassColorAttachment {
-                // The texture to save the colors to
-                view: &view,
-
-                // The texture that will receive the resolved output.
-                // This will be the same as view unless multisampling is enabled.
-                resolve_target: None,
-
-                // What to do with the colors on the screen
-                ops: Operations {
-                    // How to handle colors from the previous frame
-                    load: LoadOp::Clear(self.background_color),
-
-                    // Whether we want to store the renderedd results to the texture
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            occlusion_query_set: None,
-            timestamp_writes: None,
-        });
+        self.render_with_pipeline(&mut encoder, &view);
 
         // Submit will accept anything that implements IntoIter.
         // Send the render pass(es) to the GPU
