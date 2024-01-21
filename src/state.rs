@@ -8,7 +8,11 @@ use wgpu::{
     SurfaceConfiguration, SurfaceError, TextureFormat, TextureUsages, TextureView,
     TextureViewDescriptor, VertexState,
 };
-use winit::{dpi::PhysicalSize, event::WindowEvent, window::Window};
+use winit::{
+    dpi::PhysicalSize,
+    event::{ElementState, WindowEvent},
+    window::Window,
+};
 
 pub struct State {
     surface: Surface,
@@ -24,6 +28,7 @@ pub struct State {
 
     background_color: Color,
     render_pipeline: RenderPipeline,
+    second_pipeline: RenderPipeline,
 }
 
 impl State {
@@ -68,7 +73,11 @@ impl State {
             .unwrap()
     }
 
-    fn create_pipeline(device: &Device, config: &SurfaceConfiguration) -> RenderPipeline {
+    fn create_pipeline(
+        device: &Device,
+        config: &SurfaceConfiguration,
+        fragment_entry_point: &str,
+    ) -> RenderPipeline {
         // Read the shader.
         // Can also be done with:
         //let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
@@ -101,7 +110,7 @@ impl State {
             // to the surface
             fragment: Some(FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: fragment_entry_point,
 
                 // The color outputs to set up
                 targets: &[Some(ColorTargetState {
@@ -229,7 +238,8 @@ impl State {
         // Apply the configurations
         surface.configure(&device, &config);
 
-        let render_pipeline = Self::create_pipeline(&device, &config);
+        let render_pipeline = Self::create_pipeline(&device, &config, "fs_main");
+        let second_pipeline = Self::create_pipeline(&device, &config, "fs_main2");
 
         Self {
             surface,
@@ -245,6 +255,7 @@ impl State {
                 a: 1.0,
             },
             render_pipeline,
+            second_pipeline,
         }
     }
 
@@ -267,7 +278,10 @@ impl State {
     pub fn input(&mut self, event: &WindowEvent) -> bool {
         match event {
             WindowEvent::KeyboardInput { input, .. } => {
-                if let Some(key) = input.virtual_keycode {
+                if let Some(key) = input
+                    .virtual_keycode
+                    .filter(|_| input.state == ElementState::Pressed)
+                {
                     match key {
                         winit::event::VirtualKeyCode::B => {
                             self.background_color = Color {
@@ -292,6 +306,9 @@ impl State {
                                 b: 0.0,
                                 a: 1.0,
                             }
+                        }
+                        winit::event::VirtualKeyCode::Space => {
+                            core::mem::swap(&mut self.render_pipeline, &mut self.second_pipeline);
                         }
                         _ => {}
                     }
