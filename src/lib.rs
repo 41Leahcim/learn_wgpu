@@ -1,7 +1,8 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 
+use wgpu::SurfaceError;
 use winit::{
-    event::{ElementState, KeyboardInput, VirtualKeyCode},
+    event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
@@ -9,10 +10,15 @@ use winit::{
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+use crate::state::State;
+
+pub mod state;
+
 /// # Panics
 /// panics if the window couldn't be created
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
-pub fn run() {
+#[allow(clippy::future_not_send)]
+pub async fn run() {
     // Required for wgpu error messages to be printed
     cfg_if::cfg_if! {
         if #[cfg(target_arch="wasm32")]{
@@ -25,6 +31,7 @@ pub fn run() {
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
+    let mut state = State::new(window).await;
 
     #[cfg(target_arch = "wasm32")]
     {
@@ -32,7 +39,7 @@ pub fn run() {
         use winit::dpi::PhysicalSize;
         use winit::platform::web::WindowExtWebSys;
 
-        window.set_inner_size(PhysicalSize::new(450, 400));
+        state.window().set_inner_size(PhysicalSize::new(450, 400));
 
         web_sys::window()
             .and_then(|win| win.document())
@@ -46,19 +53,44 @@ pub fn run() {
     }
 
     event_loop.run(move |event, _, control_flow| match event {
-        winit::event::Event::WindowEvent { window_id, event } if window_id == window.id() => {
-            match event {
-                winit::event::WindowEvent::CloseRequested
-                | winit::event::WindowEvent::KeyboardInput {
-                    input:
-                        KeyboardInput {
-                            state: ElementState::Pressed,
-                            virtual_keycode: Some(VirtualKeyCode::Escape),
+        Event::RedrawRequested(window_id) if window_id == state.window().id() => {
+            state.update();
+            match state.render() {
+                Ok(()) => {}
+                // Reconfigue the surface if lost
+                Err(SurfaceError::Lost) => state.resize(state.size()),
+
+                // The system is out of memory, we should probably quit
+                Err(SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
+
+                // All other erros (Outdated, TimeOut) should be resolved by the next frame
+                Err(e) => eprintln!("{e:?}"),
+            }
+        }
+        // RedrawRequested will onluy trigger once unless we manually request it.
+        Event::MainEventsCleared => state.window().request_redraw(),
+
+        Event::WindowEvent { window_id, event } if window_id == state.window().id() => {
+            if !state.input(&event) {
+                {
+                    match event {
+                        WindowEvent::Resized(physical_size) => state.resize(physical_size),
+                        WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                            state.resize(*new_inner_size);
+                        }
+                        winit::event::WindowEvent::CloseRequested
+                        | winit::event::WindowEvent::KeyboardInput {
+                            input:
+                                KeyboardInput {
+                                    state: ElementState::Pressed,
+                                    virtual_keycode: Some(VirtualKeyCode::Escape),
+                                    ..
+                                },
                             ..
-                        },
-                    ..
-                } => *control_flow = ControlFlow::Exit,
-                _ => {}
+                        } => *control_flow = ControlFlow::Exit,
+                        _ => {}
+                    }
+                }
             }
         }
         _ => {}
